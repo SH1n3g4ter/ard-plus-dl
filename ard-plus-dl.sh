@@ -1,35 +1,128 @@
-#!/bin/bash
-curlBin=$(which curl)
-# use snap curl version if your OS is outdated
-#curlBin=/snap/bin/curl
+#!/usr/bin/env bash
+set -e
+
+scriptdir="$(dirname "$0")"
+curlBin=$(command -v curl)
 FILE=ard-plus-token
-# parse input parameter
-if [ "$1" == "--automatic" ]
-then
-  automatic_download=1
-  shift
-else
-  automatic_download=0
+USERAGENT="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+
+function usage {
+  echo "There is two ways to run this script:"
+  echo "  1. input arguments:"
+  echo "    ./ard-plus-dl <ard-plus-url> <username> <password>"
+  echo "  2. with a environment file, with the following entries:"
+  echo "    --- .env ---"
+  echo "    ARD_USER=your@email.com"
+  echo "    ARD_PW=yourpw"
+  echo "    -----------------"
+  echo "    then run the script as follows:"
+  echo "    ./ard-plus-dl --config </path/to/config/.env> <ard-plus-url>"
+  echo "    If the environment file (.env) is located in the script directory the --config flag may be obmitted"
+  echo "    There is a template file (.env.template)"
+  echo ""
+  echo "flags:"
+  echo "  -a|--automatic    will automatically select and download the episode/season"
+  echo "  -c|--config       path to environment file"
+  echo "     --help         prints this help page"
+  echo "  -o|--outdir       output directory"
+  echo "  -s|--skip         will skip episodes to download"
+}
+
+# requirement checks
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "missing ffmpeg"
+    exit 1
 fi
+if ! command -v jq >/dev/null 2>&1; then
+    echo "missing jq"
+    exit 1
+fi
+if ! command -v yt-dlp >/dev/null 2>&1; then
+    echo "missing yt-dlp"
+    exit 1
+fi
+
+# parse input parameter
+automatic_download=0
+skip=1
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -a|--automatic)
+      automatic_download=1
+      shift # past argument
+      ;;
+    -s|--skip)
+      skip="$2"
+      shift
+      shift
+      ;;
+    -c|--config)
+      config_path="$2"
+      shift
+      shift
+      ;;
+    -o|--outdir)
+      outdir="$2"
+      shift
+      shift
+      ;;
+    --help)
+      usage
+      exit
+      ;;
+    -*|--*)
+      echo "Unknown option $1"
+      usage
+      exit 1
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1") # save positional arg
+      shift # past argument
+      ;;
+  esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+if [ -n "$config_path" ]; then
+    source "$config_path"
+elif [ -f "$scriptdir/.env" ]; then
+    source "$scriptdir/.env"
+fi
+if [ -z "$outdir" ]; then
+    if [ -n "$OUTDIR" ]; then
+        outdir="$OUTDIR"
+    else
+        outdir="."
+    fi
+fi
+
 ardPlusUrl=$1
-username=$2
-password=$3
-skip=$4
+if [ -n "$2" ]; then
+    username="$2"
+else
+    username="$ARD_USER"
+fi
+if [ -n "$3" ]; then
+    password="$3"
+else
+    password="$ARD_PW"
+fi
+
 movieId=''
 token=''
 showPath=$(echo $ardPlusUrl | rev | cut -d "/" -f1 | rev)
 showId=$(echo $showPath | cut -d "-" -f1)
 
-if [[ -z "$username" || -z "$password" ]]
-then
-  echo "Credentials missing! Please start the script with 3 parameters: "
-  echo "./ard-plus-dl <ard-plus-url> <username> <password>"
-  exit 1
+if [ -z "$ardPlusUrl" ]; then
+    usage
+    exit 1
 fi
 
-if [[ -z "$skip" ]]
-then
-    skip=1
+if [[ -z "$username" || -z "$password" ]]; then
+  usage
+  exit 1
 fi
 
 content_result=$(mktemp)
@@ -43,7 +136,7 @@ login() {
     -H 'content-type: application/x-www-form-urlencoded' \
     -H 'origin: https://www.ardplus.de' \
     -H 'referer: https://www.ardplus.de/' \
-    -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36' \
+    -H "user-agent: ${USERAGENT}" \
     --data-raw "username=${encoded_username}&password=${encoded_password}" | grep -i authorization | awk '{print $3}' | tr -d \\r)
     tokenType=$(echo $token | cut -f1 -d "." | base64 -d | jq -r '.typ')
     if [[ "$tokenType" == "JWT" ]]; then
@@ -62,7 +155,7 @@ cleanup() {
     -H "cookie: sid=$token" \
     -H 'origin: https://www.ardplus.de' \
     -H 'referer: https://www.ardplus.de/' \
-    -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36' \
+    -H "user-agent: ${USERAGENT}" \
     --data-raw "{\"contentId\":\"$movieId\",\"contentType\":\"CmsMovie\"}" \
     --compressed)
 }
@@ -75,7 +168,7 @@ auth() {
         -H "cookie: sid=$token" \
         -H 'origin: https://www.ardplus.de' \
         -H 'referer: https://www.ardplus.de/' \
-        -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36' \
+        -H "user-agent: ${USERAGENT}" \
         --data-raw "{\"contentId\":\"$movieId\",\"contentType\":\"CmsEpisode\",\"download\":false,\"appInfo\":{\"platform\":\"web\",\"appVersion\":\"1.0.0\",\"build\":\"web\",\"bundleIdentifier\":\"web\"},\"deviceInfo\":{\"isTouchDevice\":false,\"isTablet\":false,\"isFireOS\":false,\"appPlatform\":\"web\",\"isIOS\":false,\"isCastReceiver\":false,\"isSafari\":false,\"isFirefox\":false}}" \
         --compressed)
     urlParam=$(echo ${auth} | jq -r '.authorizationParams')
@@ -95,7 +188,7 @@ trap term SIGINT
 if [ -f "$FILE" ]; then
     # Using cached token
     token=$(<$FILE)
-else 
+else
     # Log in once
     login $username $password
 fi
@@ -121,7 +214,7 @@ seasonsStatus=$("$curlBin" -s -o $content_result -w "%{http_code}" "${contentUrl
     -H "cookie: sid=$token" \
     -H 'origin: https://www.ardplus.de' \
     -H 'referer: https://www.ardplus.de/' \
-    -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
+    -H "user-agent: ${USERAGENT}")
 if [[ $seasonsStatus != "200" ]]; then
     #retry once
     echo "Couldn't get season details. Trying again!"
@@ -132,7 +225,7 @@ if [[ $seasonsStatus != "200" ]]; then
     -H "cookie: sid=$token" \
     -H 'origin: https://www.ardplus.de' \
     -H 'referer: https://www.ardplus.de/' \
-    -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
+    -H "user-agent: {USERAGENT}")
     contentResult=$(cat $content_result)
 else
     contentResult=$(cat $content_result)
@@ -151,8 +244,8 @@ if [[ "$movie" != null ]]; then
     urlParam=$( auth )
     downloadUrl=${videoUrl}?${urlParam}
     echo "Lade Film ${filename}..."
-    yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*" --embed-subs --merge-output-format mp4 ${downloadUrl} -o "$filename"
-    cleanup
+    savepath="${outdir}/${filename}"
+    yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*" --embed-subs --merge-output-format mp4 ${downloadUrl} -o "$savepath"
 elif [[ "$tvshow" != null ]]; then
     requestedShow=$(echo "$contentResult" | jq -r '.data.series.title')
     seasonIds=$(echo "$contentResult" | jq '[.data.series.seasons.nodes[] | { season: .seasonInSeries, seasonId: .id, title: .title }]')
@@ -180,7 +273,7 @@ elif [[ "$tvshow" != null ]]; then
         -H "cookie: sid=$token" \
         -H 'origin: https://www.ardplus.de' \
         -H 'referer: https://www.ardplus.de/' \
-        -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
+        -H "user-agent: ${USERAGENT}")
         episodes=$(echo $seasonData | jq '[.data.episodes.nodes[] | { id: .id, episodeNo: .episodeInSeason, title: .title, videoUrl: .videoSource.dashUrl }]')
         amount=$(echo $episodes | jq '. | length')
         echo -e "\nStaffel $selectedSeason hat $amount Folgen."
@@ -202,7 +295,8 @@ elif [[ "$tvshow" != null ]]; then
             urlParam=$( auth )
             downloadUrl=${videoUrl}?${urlParam}
             echo "Lade ${filename}..."
-            yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*" --embed-subs --merge-output-format mp4 ${downloadUrl} -o "$filename"
+            savepath="${outdir}/${filename}"
+            yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*" --embed-subs --merge-output-format mp4 ${downloadUrl} -o "$savepath"
             cleanup
         done < <(echo "$episodes" | sed 's/\\"//g' | jq -c '.[]' | tail -n +$skip)
 
@@ -217,7 +311,7 @@ elif [[ "$ardPlusUrl" == *"tatort"* ]]; then
     --header "cookie: sid=$token" \
     --header 'origin: https://www.ardplus.de' \
     --header 'referer: https://www.ardplus.de/' \
-    --header 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
+    --header "user-agent: ${USERAGENT}")
 
     tatortCityEpisodes=$(echo $tatortResponse | perl -0777 -ne 'print "$1\n" if /<script type="application\/ld\+json">\s*(.*?)\s*<\/script>/s')
 
@@ -246,7 +340,7 @@ elif [[ "$ardPlusUrl" == *"tatort"* ]]; then
             -H "cookie: sid=$token" \
             -H 'origin: https://www.ardplus.de' \
             -H 'referer: https://www.ardplus.de/' \
-            -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
+            -H "user-agent: ${USERAGENT}")
 
         if [[ $episodeDetailsStatus != "200" ]]; then
             #retry once
@@ -258,7 +352,7 @@ elif [[ "$ardPlusUrl" == *"tatort"* ]]; then
             -H "cookie: sid=$token" \
             -H 'origin: https://www.ardplus.de' \
             -H 'referer: https://www.ardplus.de/' \
-            -H 'user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36' \
+            -H "user-agent: ${USERAGENT}" \
             --compressed)
             episodeDetails=$(cat current-tatort-episode.txt)
         else
@@ -286,11 +380,12 @@ elif [[ "$ardPlusUrl" == *"tatort"* ]]; then
         urlParam=$( auth )
         downloadUrl=${videoUrl}?${urlParam}
         echo "Lade ${filename}..."
-        yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*" --embed-subs --merge-output-format mp4 ${downloadUrl} -o "$filename"
+        savepath="${outdir}/${filename}"
+        yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*" --embed-subs --merge-output-format mp4 ${downloadUrl} -o "$savepath"
         cleanup
         sleep 1
     done < <(echo "$tatortCityEpisodes" | jq -c '.itemListElement[]' | tail -n +$skip )
-else 
+else
     echo "invalid content"
 fi
 cleanup
