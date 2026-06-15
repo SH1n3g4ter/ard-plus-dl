@@ -4,7 +4,7 @@ set -e
 scriptdir="$(dirname "$0")"
 curlBin=$(command -v curl)
 FILE=ard-plus-token
-USERAGENT="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+USERAGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 
 function usage {
   echo "There is two ways to run this script:"
@@ -23,6 +23,7 @@ function usage {
   echo "flags:"
   echo "  -a|--automatic    will automatically select and download the episode/season"
   echo "  -c|--config       path to environment file"
+  echo "     --debug        enable debug prints"
   echo "     --help         prints this help page"
   echo "  -o|--outdir       output directory"
   echo "  -s|--skip         will skip episodes to download"
@@ -71,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       usage
       exit
       ;;
+    --debug)
+      DEBUG="YES"
+      shift
+      ;;
     -*|--*)
       echo "Unknown option $1"
       usage
@@ -84,6 +89,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+debug() {
+    if [ "$DEBUG" = "YES" ]; then
+        echo "$1"
+    fi
+}
 
 if [ -n "$config_path" ]; then
     source "$config_path"
@@ -141,6 +152,7 @@ login() {
     tokenType=$(echo $token | cut -f1 -d "." | base64 -d | jq -r '.typ')
     if [[ "$tokenType" == "JWT" ]]; then
         echo $token | tr -d \\r > $FILE
+        debug "login successful"
     else
         echo "Login not possible! Please check credentials and subscription for user $username."
         exit 1
@@ -230,6 +242,8 @@ if [[ $seasonsStatus != "200" ]]; then
 else
     contentResult=$(cat $content_result)
 fi
+
+debug "contentResult: $contentResult"
 
 # check whether content is movie or series
 movie=$(echo "$contentResult" | jq '.data.movie')
