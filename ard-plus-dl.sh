@@ -92,7 +92,7 @@ set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 debug() {
     if [ "$DEBUG" = "YES" ]; then
-        echo "$1"
+        echo "$1" >&2
     fi
 }
 
@@ -183,7 +183,10 @@ auth() {
         -H "user-agent: ${USERAGENT}" \
         --data-raw "{\"contentId\":\"$movieId\",\"contentType\":\"CmsEpisode\",\"download\":false,\"appInfo\":{\"platform\":\"web\",\"appVersion\":\"1.0.0\",\"build\":\"web\",\"bundleIdentifier\":\"web\"},\"deviceInfo\":{\"isTouchDevice\":false,\"isTablet\":false,\"isFireOS\":false,\"appPlatform\":\"web\",\"isIOS\":false,\"isCastReceiver\":false,\"isSafari\":false,\"isFirefox\":false}}" \
         --compressed)
-    urlParam=$(echo ${auth} | jq -r '.authorizationParams')
+    urlParam=$(echo ${auth} | jq -re '.authorizationParams' 2>/dev/null ) || {
+        debug "missing authorizationParams, old token is invalid"
+        return
+    }
     echo "$urlParam"
 }
 
@@ -195,6 +198,7 @@ term() {
     exit 0
 }
 trap term SIGINT
+trap term ERR
 
 # perform login
 if [ -f "$FILE" ]; then
@@ -208,9 +212,10 @@ fi
 # check if token is valid
 movieId="a0S010000007GcX"
 urlParam=$( auth )
-if [[ "$urlParam" == null ]]; then
+# if not logged in
+if [[ "$urlParam" == "" ]]; then
+    debug "obtaining new token"
     login $username $password
-    token=$(<$FILE)
     if [[ -z "$token" ]]; then
         echo "Login not possible! Please check credentials and subscription for user $username."
         exit 0
